@@ -1,0 +1,34 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+.env
+venv/
+.venv/
+
+# Node
+node_modules/
+dist/
+.next/
+*.local
+
+# Env files (keep .env.production in git for Vercel)
+.env.development.local
+.env.local
+
+# OS
+.DS_Store
+Thumbs.db
+
+# HuggingFace cloned repo (separate git repo — not part of this project)
+fairlens-ai-backend/
+
+# Test files
+test_temp.csv
+sample_data/generate_samples.py
+
+# Build artifacts
+fairlens-ai/frontend/dist/
