@@ -14,7 +14,7 @@ const NAV = [
 
 export default function Sidebar({ active, onNavigate }) {
   return (
-    <aside className="w-64 flex flex-col shrink-0 relative"
+    <aside className="w-64 flex flex-col shrink-0 relative h-full"
       style={{ background: 'linear-gradient(180deg, #0a0f1e 0%, #060d1a 100%)', borderRight: '1px solid rgba(99,102,241,0.2)' }}>
 
       {/* Top glow line */}

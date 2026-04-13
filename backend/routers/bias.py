@@ -40,26 +40,48 @@ def detect_bias(req: BiasRequest):
     X = df_enc.drop(columns=[req.target_column])
     y = df_enc[req.target_column]
 
-    try:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42, stratify=y
-        )
-    except ValueError:
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=0.2, random_state=42
-        )
-
-    model = RandomForestClassifier(n_estimators=100, random_state=42)
-    model.fit(X_train, y_train)
-
-    store["model"]         = model
-    store["X_test"]        = X_test
-    store["y_test"]        = y_test
-    store["feature_names"] = list(X.columns)
-
-    y_pred      = model.predict(X_test)
-    y_pred_prob = model.predict_proba(X_test)[:, 1]
-    accuracy    = round(model.score(X_test, y_test) * 100, 2)
+    # ── Use uploaded model OR train a new one ─────────────────────────────
+    model_source = store.get("model_source", "trained")
+    if model_source == "uploaded" and store.get("model") is not None:
+        model = store["model"]
+        # Align features if model has feature_names_in_
+        if store.get("feature_names"):
+            feat = store["feature_names"]
+            for col in feat:
+                if col not in X.columns:
+                    X[col] = 0
+            # Only keep columns model knows about, in correct order
+            X_model = X[[c for c in feat if c in X.columns]]
+        else:
+            X_model = X
+        # No train/test split for uploaded model — use full encoded data
+        X_test  = X_model
+        y_test  = y
+        y_pred  = model.predict(X_test)
+        y_pred_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
+        accuracy = round(float((y_pred == y_test.values).mean()) * 100, 2)
+        store["X_test"]        = X_test
+        store["y_test"]        = y_test
+        store["feature_names"] = list(X_model.columns)
+    else:
+        # Train new RandomForest
+        try:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42, stratify=y
+            )
+        except ValueError:
+            X_train, X_test, y_train, y_test = train_test_split(
+                X, y, test_size=0.2, random_state=42
+            )
+        model = RandomForestClassifier(n_estimators=100, random_state=42)
+        model.fit(X_train, y_train)
+        store["model"]         = model
+        store["X_test"]        = X_test
+        store["y_test"]        = y_test
+        store["feature_names"] = list(X.columns)
+        y_pred      = model.predict(X_test)
+        y_pred_prob = model.predict_proba(X_test)[:, 1]
+        accuracy    = round(model.score(X_test, y_test) * 100, 2)
 
     # ── Confusion matrix ──────────────────────────────────────────────────────
     classes = sorted(y_test.unique().tolist())
@@ -81,15 +103,15 @@ def detect_bias(req: BiasRequest):
     # ── ROC curve ─────────────────────────────────────────────────────────────
     roc_data = None
     try:
-        fpr, tpr, _ = roc_curve(y_test, y_pred_prob)
-        roc_auc     = round(auc(fpr, tpr), 4)
-        # Downsample to 40 points for frontend
-        step = max(1, len(fpr) // 40)
-        roc_data = {
-            "fpr":     [round(float(v), 4) for v in fpr[::step]],
-            "tpr":     [round(float(v), 4) for v in tpr[::step]],
-            "auc":     roc_auc,
-        }
+        if y_pred_prob is not None:
+            fpr, tpr, _ = roc_curve(y_test, y_pred_prob)
+            roc_auc     = round(auc(fpr, tpr), 4)
+            step = max(1, len(fpr) // 40)
+            roc_data = {
+                "fpr": [round(float(v), 4) for v in fpr[::step]],
+                "tpr": [round(float(v), 4) for v in tpr[::step]],
+                "auc": roc_auc,
+            }
     except Exception:
         pass
 
@@ -169,6 +191,7 @@ def detect_bias(req: BiasRequest):
         "severity":                 severity,
         "confusion_matrix":         cm_data,
         "roc_curve":                roc_data,
+        "model_source":             store.get("model_source", "trained"),
         "feature_importance": [
             {"feature": f, "importance": round(float(i), 4)}
             for f, i in feature_importance

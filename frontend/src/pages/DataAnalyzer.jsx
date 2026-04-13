@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from 'react'
 import api from '../api'
-import { Upload, Database, AlertCircle, Cpu, CheckCircle, Layers, ChevronRight } from 'lucide-react'
+import { Upload, Database, AlertCircle, Cpu, CheckCircle, Layers, ChevronRight, Box } from 'lucide-react'
 import Card from '../components/Card'
 import { getDatasetState, setDatasetState, subscribeDatasetStore } from '../store/datasetStore'
 
@@ -9,6 +9,28 @@ const SAMPLE_META = {
   loan_approval:      { color: '#10b981', icon: '🏦', tag: 'Gender Bias' },
   compas_recidivism:  { color: '#f59e0b', icon: '⚖️', tag: 'Racial Bias' },
 }
+
+// Hardcoded — no API needed, always visible
+const MODEL_CARDS = [
+  {
+    id:    'fair_loan_model',
+    icon:  '✅',
+    title: 'Fair Loan Model',
+    desc:  'Gender removed from training — balanced classes',
+    tag:   'Unbiased · DI ~0.9+',
+    color: '#10b981',
+    hint:  'Use with Loan Approval dataset',
+  },
+  {
+    id:    'biased_loan_model',
+    icon:  '⚠️',
+    title: 'Biased Loan Model',
+    desc:  'Gender heavily weighted in decisions',
+    tag:   'Biased · DI ~0.5',
+    color: '#f59e0b',
+    hint:  'Use with Loan Approval dataset',
+  },
+]
 
 export default function DataAnalyzer() {
   const [result,    setResult]    = useState(getDatasetState().uploadResult)
@@ -20,6 +42,14 @@ export default function DataAnalyzer() {
   const [samples,   setSamples]   = useState([])
   const [loadingId, setLoadingId] = useState(null)
   const inputRef = useRef()
+
+  // Model upload state
+  const [modelResult,    setModelResult]    = useState(null)
+  const [modelLoading,   setModelLoading]   = useState(false)
+  const [modelError,     setModelError]     = useState(null)
+  const [modelDragging,  setModelDragging]  = useState(false)
+  const [loadingModelId, setLoadingModelId] = useState(null)
+  const modelInputRef = useRef()
 
   useEffect(() => {
     return subscribeDatasetStore(s => {
@@ -62,6 +92,33 @@ export default function DataAnalyzer() {
       setError(e.response?.data?.detail || 'Failed to load sample')
     } finally {
       setLoadingId(null)
+    }
+  }
+
+  async function handleModelFile(file) {
+    if (!file) return
+    setModelLoading(true); setModelError(null); setModelResult(null)
+    const form = new FormData()
+    form.append('file', file)
+    try {
+      const { data } = await api.post('/api/analyze/upload-model', form)
+      setModelResult(data)
+    } catch (e) {
+      setModelError(e.response?.data?.detail || 'Model upload failed')
+    } finally {
+      setModelLoading(false)
+    }
+  }
+
+  async function loadSampleModel(id) {
+    setLoadingModelId(id); setModelError(null); setModelResult(null)
+    try {
+      const { data } = await api.post(`/api/analyze/load-sample-model/${id}`)
+      setModelResult(data)
+    } catch (e) {
+      setModelError(e.response?.data?.detail || 'Failed to load sample model')
+    } finally {
+      setLoadingModelId(null)
     }
   }
 
@@ -193,6 +250,118 @@ export default function DataAnalyzer() {
           <AlertCircle size={16} /> {error}
         </div>
       )}
+
+      {/* ── Model Upload Section ─────────────────────────────────────────── */}
+      <div>
+        <div className="flex items-center gap-2 mb-3">
+          <Box size={13} style={{ color: '#8b5cf6' }} />
+          <span className="text-xs font-mono uppercase tracking-widest" style={{ color: '#475569' }}>
+            Quick Start — Sample Models (Biased vs Unbiased)
+          </span>
+          <div className="flex-1 h-px" style={{ background: 'linear-gradient(90deg, rgba(139,92,246,0.3), transparent)' }} />
+        </div>
+
+        {/* Hardcoded model cards — always visible */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+          {MODEL_CARDS.map(m => {
+            const isLoading = loadingModelId === m.id
+            const isLoaded  = modelResult?.filename === `${m.id}.pkl`
+            return (
+              <button key={m.id} onClick={() => loadSampleModel(m.id)} disabled={isLoading}
+                className="text-left p-4 rounded-xl transition-all group"
+                style={{
+                  background: isLoaded ? `${m.color}12` : 'rgba(15,23,42,0.6)',
+                  border: `1px solid ${isLoaded ? m.color + '50' : 'rgba(139,92,246,0.15)'}`,
+                }}
+                onMouseEnter={e => { if (!isLoaded) { e.currentTarget.style.borderColor = m.color + '40'; e.currentTarget.style.background = `${m.color}08` }}}
+                onMouseLeave={e => { if (!isLoaded) { e.currentTarget.style.borderColor = 'rgba(139,92,246,0.15)'; e.currentTarget.style.background = 'rgba(15,23,42,0.6)' }}}>
+                <div className="flex items-start gap-2">
+                  <span className="text-xl">{m.icon}</span>
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-mono font-semibold text-white">{m.title}</span>
+                      {isLoaded && <CheckCircle size={11} style={{ color: m.color }} />}
+                    </div>
+                    <div className="text-xs font-mono mt-0.5" style={{ color: '#475569' }}>{m.desc}</div>
+                    <div className="mt-1.5 flex items-center justify-between">
+                      <span className="text-xs font-mono px-1.5 py-0.5 rounded"
+                        style={{ background: `${m.color}15`, color: m.color, border: `1px solid ${m.color}30` }}>
+                        {m.tag}
+                      </span>
+                      <span className="text-xs font-mono" style={{ color: '#334155' }}>{m.hint}</span>
+                    </div>
+                  </div>
+                  <ChevronRight size={13} style={{ color: '#334155' }} className="mt-0.5 group-hover:translate-x-0.5 transition-transform flex-shrink-0" />
+                </div>
+                {isLoading && (
+                  <div className="mt-2 flex items-center gap-2 text-xs font-mono" style={{ color: m.color }}>
+                    <div className="w-3 h-3 border rounded-full animate-spin" style={{ borderColor: m.color, borderTopColor: 'transparent' }} />
+                    Loading model...
+                  </div>
+                )}
+              </button>
+            )
+          })}
+        </div>
+
+        <p className="text-xs font-mono mb-3" style={{ color: '#334155' }}>
+          ◈ Or upload your own <span style={{ color: '#8b5cf6' }}>.pkl / .joblib</span> model below
+        </p>
+
+        <div
+          onDragOver={e => { e.preventDefault(); setModelDragging(true) }}
+          onDragLeave={() => setModelDragging(false)}
+          onDrop={e => { e.preventDefault(); setModelDragging(false); handleModelFile(e.dataTransfer.files[0]) }}
+          onClick={() => modelInputRef.current.click()}
+          className="relative rounded-xl p-6 text-center cursor-pointer transition-all"
+          style={{
+            border: `2px dashed ${modelDragging ? '#8b5cf6' : modelResult ? 'rgba(139,92,246,0.5)' : 'rgba(139,92,246,0.25)'}`,
+            background: modelDragging ? 'rgba(139,92,246,0.08)' : modelResult ? 'rgba(139,92,246,0.05)' : 'rgba(15,23,42,0.4)',
+          }}>
+          {modelResult ? (
+            <div className="flex items-center justify-center gap-3">
+              <CheckCircle size={20} style={{ color: '#8b5cf6' }} />
+              <div className="text-left">
+                <p className="text-white font-medium text-sm font-space">{modelResult.filename}</p>
+                <p className="text-xs font-mono mt-0.5" style={{ color: '#8b5cf6' }}>
+                  {modelResult.model_type} · {modelResult.n_features ? `${modelResult.n_features} features` : 'features auto-detected'} · Click to replace
+                </p>
+              </div>
+            </div>
+          ) : (
+            <div className="flex items-center justify-center gap-3">
+              <Box size={24} style={{ color: modelDragging ? '#8b5cf6' : '#475569' }} />
+              <div className="text-left">
+                <p className="text-white text-sm font-medium font-space">Drop your trained model here</p>
+                <p className="text-xs font-mono mt-0.5" style={{ color: '#475569' }}>
+                  sklearn .pkl / .joblib — bias will be measured on your model instead of training a new one
+                </p>
+              </div>
+            </div>
+          )}
+          <input ref={modelInputRef} type="file" accept=".pkl,.joblib,.pickle" className="hidden"
+            onChange={e => handleModelFile(e.target.files[0])} />
+        </div>
+
+        {modelLoading && (
+          <div className="flex items-center gap-2 mt-2 text-xs font-mono" style={{ color: '#8b5cf6' }}>
+            <div className="w-3 h-3 border-2 rounded-full animate-spin" style={{ borderColor: '#8b5cf6', borderTopColor: 'transparent' }} />
+            Loading model...
+          </div>
+        )}
+        {modelError && (
+          <div className="flex items-center gap-2 rounded-lg p-3 text-sm font-mono mt-2"
+            style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171' }}>
+            <AlertCircle size={14} /> {modelError}
+          </div>
+        )}
+        {modelResult && (
+          <div className="mt-2 p-3 rounded-lg text-xs font-mono"
+            style={{ background: 'rgba(139,92,246,0.08)', border: '1px solid rgba(139,92,246,0.2)', color: '#c4b5fd' }}>
+            ✓ {modelResult.message}
+          </div>
+        )}
+      </div>
 
       {result && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">

@@ -278,6 +278,12 @@ export default function BiasDetection() {
             <Card>
               <div className="text-xs font-mono uppercase tracking-widest mb-2" style={{ color: '#475569' }}>Bias Severity</div>
               <div className="mt-1"><SeverityBadge level={result.severity} /></div>
+              {result.model_source === 'uploaded' && (
+                <div className="mt-2 text-xs font-mono px-1.5 py-0.5 rounded inline-block"
+                  style={{ background: 'rgba(139,92,246,0.15)', color: '#a78bfa', border: '1px solid rgba(139,92,246,0.3)' }}>
+                  📦 Your Model
+                </div>
+              )}
             </Card>
           </div>
 

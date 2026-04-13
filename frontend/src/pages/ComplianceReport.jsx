@@ -1,7 +1,8 @@
 import { useState } from 'react'
 import api from '../api'
-import { Download, AlertCircle, FileText, Shield } from 'lucide-react'
+import { Download, AlertCircle, FileText, Shield, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import Card from '../components/Card'
+import { getDatasetState } from '../store/datasetStore'
 
 const REGS = [
   { name: 'EU AI Act',             desc: 'High-risk AI systems must meet strict fairness and transparency requirements.', color: '#6366f1', icon: '🇪🇺' },
@@ -14,6 +15,44 @@ export default function ComplianceReport() {
   const [loading,    setLoading]    = useState(false)
   const [error,      setError]      = useState(null)
   const [downloaded, setDownloaded] = useState(false)
+
+  // Read bias results from store via datasetStore state
+  const ds = getDatasetState()
+  const hasDataset = !!ds.uploadResult
+
+  // We'll fetch bias status from backend on mount
+  const [biasStatus, setBiasStatus] = useState(null)
+  useState(() => {
+    api.get('/api/fix/status').then(r => setBiasStatus(r.data)).catch(() => {})
+  })
+
+  // Deployment readiness checks
+  const checks = biasStatus ? [
+    {
+      label: 'Dataset uploaded',
+      pass: biasStatus.has_dataset,
+      desc: 'A dataset has been loaded for analysis',
+    },
+    {
+      label: 'Bias detection completed',
+      pass: biasStatus.model_ready,
+      desc: 'Fairness metrics have been measured',
+    },
+    {
+      label: 'Target column defined',
+      pass: !!biasStatus.target,
+      desc: `Prediction target: ${biasStatus.target || 'not set'}`,
+    },
+    {
+      label: 'Sensitive attribute identified',
+      pass: !!biasStatus.sensitive,
+      desc: `Protected attribute: ${biasStatus.sensitive || 'not set'}`,
+    },
+  ] : []
+
+  const allPassed   = checks.length > 0 && checks.every(c => c.pass)
+  const anyFailed   = checks.some(c => !c.pass)
+  const readyStatus = checks.length === 0 ? null : allPassed ? 'go' : anyFailed ? 'nogo' : 'review'
 
   async function download() {
     setLoading(true); setError(null)
@@ -63,6 +102,50 @@ export default function ComplianceReport() {
           </Card>
         ))}
       </div>
+
+      {/* Deployment Readiness Checklist */}
+      {checks.length > 0 && (
+        <Card>
+          <div className="flex items-center gap-2 mb-4">
+            <Shield size={14} style={{ color: readyStatus === 'go' ? '#10b981' : readyStatus === 'nogo' ? '#f43f5e' : '#f59e0b' }} />
+            <span className="text-sm font-semibold text-white font-space">Pre-Deployment Readiness Check</span>
+            <span className="ml-auto text-xs font-mono px-2 py-0.5 rounded font-bold"
+              style={{
+                background: readyStatus === 'go' ? 'rgba(16,185,129,0.15)' : readyStatus === 'nogo' ? 'rgba(239,68,68,0.15)' : 'rgba(245,158,11,0.15)',
+                color:      readyStatus === 'go' ? '#10b981' : readyStatus === 'nogo' ? '#f87171' : '#fbbf24',
+                border:     `1px solid ${readyStatus === 'go' ? 'rgba(16,185,129,0.4)' : readyStatus === 'nogo' ? 'rgba(239,68,68,0.4)' : 'rgba(245,158,11,0.4)'}`,
+              }}>
+              {readyStatus === 'go' ? '✓ GO FOR DEPLOYMENT' : readyStatus === 'nogo' ? '✗ NOT READY' : '⚠ REVIEW REQUIRED'}
+            </span>
+          </div>
+
+          <div className="space-y-2 mb-4">
+            {checks.map((c, i) => (
+              <div key={i} className="flex items-center gap-3 p-2.5 rounded-lg"
+                style={{
+                  background: c.pass ? 'rgba(16,185,129,0.06)' : 'rgba(239,68,68,0.06)',
+                  border: `1px solid ${c.pass ? 'rgba(16,185,129,0.2)' : 'rgba(239,68,68,0.2)'}`,
+                }}>
+                {c.pass
+                  ? <CheckCircle size={14} style={{ color: '#10b981', flexShrink: 0 }} />
+                  : <XCircle    size={14} style={{ color: '#f43f5e', flexShrink: 0 }} />}
+                <div className="flex-1">
+                  <div className="text-xs font-semibold" style={{ color: c.pass ? '#6ee7b7' : '#fca5a5' }}>{c.label}</div>
+                  <div className="text-xs font-mono" style={{ color: '#475569' }}>{c.desc}</div>
+                </div>
+              </div>
+            ))}
+          </div>
+
+          {!allPassed && (
+            <div className="flex items-start gap-2 p-3 rounded-lg text-xs font-mono"
+              style={{ background: 'rgba(245,158,11,0.08)', border: '1px solid rgba(245,158,11,0.2)', color: '#fbbf24' }}>
+              <AlertTriangle size={13} style={{ flexShrink: 0, marginTop: 1 }} />
+              Complete all checks before deploying this model to production. Deploying a biased model may violate EU AI Act and GDPR regulations.
+            </div>
+          )}
+        </Card>
+      )}
 
       <Card>
         <div className="flex items-center gap-2 mb-4">
