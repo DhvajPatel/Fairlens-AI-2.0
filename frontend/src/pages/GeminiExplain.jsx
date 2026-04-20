@@ -51,9 +51,10 @@ export default function GeminiExplain() {
       } catch (_) {}
     }
     checkBias()
-    const id = setInterval(checkBias, 4000)
-    return () => clearInterval(id)
-  }, [])
+    // Only poll when dataset is loaded, use longer interval
+    const id = hasDataset ? setInterval(checkBias, 8000) : null
+    return () => { if (id) clearInterval(id) }
+  }, [hasDataset])
 
   // Determine what's blocking the user
   const missingDataset = !hasDataset
@@ -69,11 +70,12 @@ export default function GeminiExplain() {
       setResult(data)
     } catch (e) {
       const detail = e.response?.data?.detail || ''
-      if (detail === 'NO_API_KEY')         setError('No API key provided.')
-      else if (e.response?.status === 401) setError('Invalid API key — check your Gemini key.')
-      else if (e.response?.status === 429) setError('Free tier quota exceeded. Wait ~1 minute and try again.')
-      else if (e.response?.status === 404) setError('Model not available. The backend will auto-select another — try again.')
-      else if (detail.includes('bias'))    setError('Run Bias Detection first, then come back.')
+      if (detail === 'NO_API_KEY')          setError('No API key provided.')
+      else if (e.response?.status === 401)  setError('Invalid API key — check your Gemini key.')
+      else if (e.response?.status === 429)  setError('Free tier quota exceeded. Wait ~1 minute and try again.')
+      else if (e.response?.status === 503)  setError('Gemini is temporarily overloaded. Wait 30 seconds and try again.')
+      else if (e.response?.status === 404)  setError('Model not available. The backend will auto-select another — try again.')
+      else if (detail.includes('bias'))     setError('Run Bias Detection first, then come back.')
       else setError(detail || 'Gemini request failed.')
     } finally {
       setLoading(false)
@@ -224,9 +226,19 @@ export default function GeminiExplain() {
       </Card>
 
       {error && (
-        <div className="flex items-center gap-2 rounded-lg p-3 text-sm font-mono"
+        <div className="rounded-lg p-3 text-sm font-mono"
           style={{ background: 'rgba(239,68,68,0.1)', border: '1px solid rgba(239,68,68,0.3)', color: '#f87171' }}>
-          <AlertCircle size={16} /> {error}
+          <div className="flex items-center gap-2">
+            <AlertCircle size={16} />
+            <span className="flex-1">{error}</span>
+            {(error.includes('overloaded') || error.includes('quota') || error.includes('try again')) && (
+              <button onClick={run} disabled={!canRun}
+                className="px-3 py-1 rounded text-xs font-mono flex-shrink-0"
+                style={{ background: 'rgba(239,68,68,0.2)', color: '#fca5a5', border: '1px solid rgba(239,68,68,0.3)' }}>
+                Retry
+              </button>
+            )}
+          </div>
         </div>
       )}
 

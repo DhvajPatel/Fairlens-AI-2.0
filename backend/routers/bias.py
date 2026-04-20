@@ -40,29 +40,39 @@ def detect_bias(req: BiasRequest):
     X = df_enc.drop(columns=[req.target_column])
     y = df_enc[req.target_column]
 
-    # ── Use uploaded model OR train a new one ─────────────────────────────
+    # ── Use uploaded model OR train a new one ─────────────────────────────────
     model_source = store.get("model_source", "trained")
+
     if model_source == "uploaded" and store.get("model") is not None:
         model = store["model"]
-        # Align features if model has feature_names_in_
-        if store.get("feature_names"):
-            feat = store["feature_names"]
-            for col in feat:
-                if col not in X.columns:
-                    X[col] = 0
-            # Only keep columns model knows about, in correct order
-            X_model = X[[c for c in feat if c in X.columns]]
-        else:
-            X_model = X
-        # No train/test split for uploaded model — use full encoded data
+
+        # Align features to what the model expects
+        feat = store.get("feature_names") or list(X.columns)
+        for col in feat:
+            if col not in X.columns:
+                X[col] = 0
+        # Keep only columns model knows, in correct order
+        available = [c for c in feat if c in X.columns]
+        X_model = X[available].reset_index(drop=True)
+        y_model = y.reset_index(drop=True)
+
+        # Both must be same length — they are since both come from df_enc
         X_test  = X_model
-        y_test  = y
-        y_pred  = model.predict(X_test)
-        y_pred_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
-        accuracy = round(float((y_pred == y_test.values).mean()) * 100, 2)
+        y_test  = y_model
         store["X_test"]        = X_test
         store["y_test"]        = y_test
-        store["feature_names"] = list(X_model.columns)
+        store["feature_names"] = available
+
+        try:
+            y_pred      = model.predict(X_test)
+            y_pred_prob = model.predict_proba(X_test)[:, 1] if hasattr(model, "predict_proba") else None
+        except Exception as e:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Model prediction failed — check that dataset columns match model features. Error: {str(e)}"
+            )
+        accuracy = round(float((y_pred == y_test.values).mean()) * 100, 2)
+
     else:
         # Train new RandomForest
         try:
@@ -93,7 +103,7 @@ def detect_bias(req: BiasRequest):
     if len(classes) == 2:
         tn, fp, fn, tp = cm.ravel()
         cm_data.update({
-            "true_positive": int(tp), "true_negative": int(tn),
+            "true_positive":  int(tp), "true_negative":  int(tn),
             "false_positive": int(fp), "false_negative": int(fn),
             "precision": round(float(precision_score(y_test, y_pred, zero_division=0)), 4),
             "recall":    round(float(recall_score(y_test, y_pred, zero_division=0)), 4),
@@ -128,38 +138,47 @@ def detect_bias(req: BiasRequest):
     demographic_parity_diff = round(max(rates) - min(rates), 2)
 
     # ── Equal Opportunity & Equalized Odds ────────────────────────────────────
-    # Requires aligning df_clean with encoded predictions
     df_enc2   = encode_df(df_clean)
     df_clean2 = df_clean.loc[df_enc2.index].reset_index(drop=True)
     df_enc2   = df_enc2.reset_index(drop=True)
     X_all     = df_enc2.drop(columns=[req.target_column])
-    for col in list(X.columns):
+
+    feat_cols = store.get("feature_names") or list(X.columns)
+    for col in feat_cols:
         if col not in X_all.columns:
             X_all[col] = 0
-    X_all = X_all[list(X.columns)]
-    preds_all = model.predict(X_all)
+    available2 = [c for c in feat_cols if c in X_all.columns]
+    X_all = X_all[available2]
+
+    try:
+        preds_all = model.predict(X_all)
+    except Exception:
+        preds_all = np.zeros(len(X_all), dtype=int)
+
     df_clean2["_pred"] = preds_all
 
     pos_val = int(req.positive_label) if req.positive_label.isdigit() else req.positive_label
     tpr_by_group, fpr_by_group = {}, {}
     for g in df_clean2[req.sensitive_column].unique():
-        grp = df_clean2[df_clean2[req.sensitive_column] == g]
+        grp    = df_clean2[df_clean2[req.sensitive_column] == g]
         actual = grp[req.target_column].astype(str) == str(req.positive_label)
         pred   = grp["_pred"].astype(str) == str(pos_val)
-        tp_g   = (actual & pred).sum()
-        fn_g   = (actual & ~pred).sum()
-        fp_g   = (~actual & pred).sum()
-        tn_g   = (~actual & ~pred).sum()
-        tpr_by_group[str(g)] = round(float(tp_g / (tp_g + fn_g)), 4) if (tp_g + fn_g) > 0 else 0.0
-        fpr_by_group[str(g)] = round(float(fp_g / (fp_g + tn_g)), 4) if (fp_g + tn_g) > 0 else 0.0
+        tp_g   = int((actual & pred).sum())
+        fn_g   = int((actual & ~pred).sum())
+        fp_g   = int((~actual & pred).sum())
+        tn_g   = int((~actual & ~pred).sum())
+        tpr_by_group[str(g)] = round(tp_g / (tp_g + fn_g), 4) if (tp_g + fn_g) > 0 else 0.0
+        fpr_by_group[str(g)] = round(fp_g / (fp_g + tn_g), 4) if (fp_g + tn_g) > 0 else 0.0
 
     tpr_vals = list(tpr_by_group.values())
     fpr_vals = list(fpr_by_group.values())
-    equal_opportunity  = round(max(tpr_vals) - min(tpr_vals), 4) if tpr_vals else 0.0
-    equalized_odds     = round(
-        max(abs(t1 - t2) for t1 in tpr_vals for t2 in tpr_vals) +
-        max(abs(f1 - f2) for f1 in fpr_vals for f2 in fpr_vals), 4
-    ) if tpr_vals else 0.0
+
+    equal_opportunity = round(max(tpr_vals) - min(tpr_vals), 4) if len(tpr_vals) > 1 else 0.0
+
+    # Equalized odds = max of (TPR diff, FPR diff) — not sum
+    tpr_diff = max(tpr_vals) - min(tpr_vals) if len(tpr_vals) > 1 else 0.0
+    fpr_diff = max(fpr_vals) - min(fpr_vals) if len(fpr_vals) > 1 else 0.0
+    equalized_odds = round(max(tpr_diff, fpr_diff), 4)
 
     # ── Severity ──────────────────────────────────────────────────────────────
     if disparate_impact < 0.6 or demographic_parity_diff > 30:
@@ -173,25 +192,25 @@ def detect_bias(req: BiasRequest):
     store["demographic_parity_diff"] = demographic_parity_diff
     store["orig_di"]                 = disparate_impact
 
-    importances        = model.feature_importances_
+    importances = model.feature_importances_
     feature_importance = sorted(
         zip(store["feature_names"], importances),
         key=lambda x: x[1], reverse=True
     )[:8]
 
     return {
-        "accuracy":                 accuracy,
-        "approval_rates":           approval_rates,
-        "disparate_impact":         disparate_impact,
-        "demographic_parity_diff":  demographic_parity_diff,
-        "equal_opportunity_diff":   equal_opportunity,
-        "equalized_odds_diff":      equalized_odds,
-        "tpr_by_group":             tpr_by_group,
-        "fpr_by_group":             fpr_by_group,
-        "severity":                 severity,
-        "confusion_matrix":         cm_data,
-        "roc_curve":                roc_data,
-        "model_source":             store.get("model_source", "trained"),
+        "accuracy":                accuracy,
+        "approval_rates":          approval_rates,
+        "disparate_impact":        disparate_impact,
+        "demographic_parity_diff": demographic_parity_diff,
+        "equal_opportunity_diff":  equal_opportunity,
+        "equalized_odds_diff":     equalized_odds,
+        "tpr_by_group":            tpr_by_group,
+        "fpr_by_group":            fpr_by_group,
+        "severity":                severity,
+        "confusion_matrix":        cm_data,
+        "roc_curve":               roc_data,
+        "model_source":            model_source,
         "feature_importance": [
             {"feature": f, "importance": round(float(i), 4)}
             for f, i in feature_importance

@@ -140,14 +140,6 @@ export default function BiasCorrection() {
   async function run() {
     setLoading(true); setError(null)
     try {
-      // Always re-verify model is ready before running
-      const statusRes = await api.get('/api/fix/status')
-      if (!statusRes.data.model_ready) {
-        setModelReady(false)
-        setError('Run Bias Detection first — the model is not loaded.')
-        setLoading(false)
-        return
-      }
       const { data } = await api.post('/api/fix/correct', { method })
       setResult(data)
       setModelReady(true)
@@ -158,8 +150,6 @@ export default function BiasCorrection() {
         setError('Run Bias Detection first — the model is not loaded.')
       } else if (detail) {
         setError(`Server error: ${detail}`)
-      } else if (e.message) {
-        setError(`Error: ${e.message}`)
       } else {
         setError('Correction failed — check the backend console for details.')
       }

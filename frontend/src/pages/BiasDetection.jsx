@@ -156,7 +156,14 @@ export default function BiasDetection() {
       })
       setResult(data)
     } catch (e) {
-      setError(e.response?.data?.detail || 'Detection failed.')
+      const detail = e.response?.data?.detail || ''
+      if (detail.toLowerCase().includes('feature') || detail.toLowerCase().includes('shape') || detail.toLowerCase().includes('column')) {
+        setError('Model feature mismatch — make sure the dataset has the same columns the model was trained on.')
+      } else if (detail.includes('No dataset')) {
+        setError('No dataset loaded — go to Data Analyzer first.')
+      } else {
+        setError(detail || 'Detection failed.')
+      }
     } finally {
       setLoading(false)
     }

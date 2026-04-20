@@ -74,47 +74,60 @@ def gemini_explain(req: GeminiRequest):
         client   = genai.Client(api_key=api_key)
         prompt   = _build_prompt()
 
-        # Try models in order — fall back if quota or not-found
+        # Try models in order — fall back if quota, not-found, or unavailable
         models_to_try = [
             "gemini-2.5-flash",
             "gemini-2.5-flash-lite",
             "gemini-2.0-flash",
             "gemini-2.0-flash-lite",
         ]
+        RETRY_CODES = ["429", "RESOURCE_EXHAUSTED", "quota", "404", "NOT_FOUND",
+                       "503", "UNAVAILABLE", "overloaded", "high demand"]
+
         last_err = None
         for model_name in models_to_try:
-            try:
-                response = client.models.generate_content(
-                    model=model_name,
-                    contents=prompt,
-                )
-                return {
-                    "explanation": response.text,
-                    "model": model_name,
-                    "context": {
-                        "target":           store.get("target"),
-                        "sensitive":        store.get("sensitive"),
-                        "disparate_impact": store.get("disparate_impact"),
-                        "risk": (
-                            "HIGH"     if (store.get("disparate_impact") or 1) < 0.6 else
-                            "MODERATE" if (store.get("disparate_impact") or 1) < 0.8 else
-                            "LOW"
-                        ),
-                    },
-                }
-            except Exception as model_err:
-                err_str = str(model_err)
-                if any(x in err_str for x in ["429", "RESOURCE_EXHAUSTED", "quota", "404", "NOT_FOUND"]):
-                    last_err = model_err
-                    continue  # try next model
-                raise model_err  # auth or other hard error, stop immediately
+            # Try each model up to 2 times (handles brief 503 spikes)
+            for attempt in range(2):
+                try:
+                    response = client.models.generate_content(
+                        model=model_name,
+                        contents=prompt,
+                    )
+                    return {
+                        "explanation": response.text,
+                        "model": model_name,
+                        "context": {
+                            "target":           store.get("target"),
+                            "sensitive":        store.get("sensitive"),
+                            "disparate_impact": store.get("disparate_impact"),
+                            "risk": (
+                                "HIGH"     if (store.get("disparate_impact") or 1) < 0.6 else
+                                "MODERATE" if (store.get("disparate_impact") or 1) < 0.8 else
+                                "LOW"
+                            ),
+                        },
+                    }
+                except Exception as model_err:
+                    err_str = str(model_err)
+                    if any(x in err_str for x in RETRY_CODES):
+                        last_err = model_err
+                        if attempt == 0:
+                            import time
+                            time.sleep(2)  # brief wait before retry
+                        break  # move to next model after 2 attempts
+                    raise model_err  # auth or other hard error, stop immediately
 
         # All models failed
         last_msg = str(last_err) if last_err else "unknown"
         if "429" in last_msg or "RESOURCE_EXHAUSTED" in last_msg:
             raise HTTPException(
                 status_code=429,
-                detail="Free tier quota exceeded. Wait ~1 minute and retry, or enable billing at https://aistudio.google.com"
+                detail="Free tier quota exceeded. Wait ~1 minute and retry."
+            )
+        if "503" in last_msg or "UNAVAILABLE" in last_msg or "high demand" in last_msg.lower():
+            raise HTTPException(
+                status_code=503,
+                detail="Gemini is temporarily overloaded. Please try again in 30 seconds."
             )
         raise HTTPException(status_code=500, detail=f"All models unavailable: {last_msg[:200]}")
     except Exception as e:

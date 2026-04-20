@@ -101,6 +101,9 @@ def load_sample_model(model_id: str):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Could not load model: {e}")
 
+    if not hasattr(model, "predict"):
+        raise HTTPException(status_code=400, detail="Model must have a predict() method")
+
     feature_names = None
     for attr in ["feature_names_in_", "feature_names_", "feature_name_"]:
         if hasattr(model, attr):
